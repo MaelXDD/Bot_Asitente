@@ -1,0 +1,8 @@
+# raíz del repo Bot_Asitente
+.idea/
+.env
+*.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
