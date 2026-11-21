@@ -52,7 +52,8 @@ def _to_gemini_schema(types_mod: Any, js: dict) -> Any:
 
 
 class GeminiLLM:
-    def __init__(self, api_key: str, model: str, fallbacks: list[str] | None = None, temperature: float = 0.4):
+    def __init__(self, api_key: str, model: str, fallbacks: list[str] | None = None, temperature: float = 0.4,
+                 max_output_tokens: int | None = None):
         from google import genai
         from google.genai import types
         if not api_key:
@@ -63,6 +64,7 @@ class GeminiLLM:
         self.model = model
         self.models = [model] + [m for m in (fallbacks or []) if m != model]
         self.temperature = temperature
+        self.max_output_tokens = max_output_tokens or None
 
     # --- conversion de mensajes neutrales -> Content de Gemini ---------------
     def _contents(self, messages: list[dict]) -> list[Any]:
@@ -94,6 +96,8 @@ class GeminiLLM:
     def _config(self, system: str, tools: list[dict]) -> Any:
         t = self._types
         kw: dict[str, Any] = dict(system_instruction=system, temperature=self.temperature)
+        if self.max_output_tokens:
+            kw["max_output_tokens"] = self.max_output_tokens
         if tools:
             decls = []
             for d in tools:

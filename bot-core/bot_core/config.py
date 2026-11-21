@@ -13,7 +13,7 @@ def _int(name: str, default: int) -> int:
 @dataclass
 class Settings:
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-flash-latest"
+    gemini_model: str = "gemini-flash-lite-latest"   # Flash-Lite: el de mayor cupo (peticiones/tokens) del plan gratuito
     gemini_fallback_models: list[str] = field(default_factory=list)   # se prueban si el principal falla/está saturado
     database_url: str = ""
     jwt_secret: str = ""
@@ -31,6 +31,7 @@ class Settings:
     resume_days: int = 30             # una conversacion se retoma si su ultimo mensaje es mas reciente que esto
 
     pool_max: int = 5                 # conexiones a Postgres por proyecto (Render/Supabase gratis: pocas)
+    max_output_tokens: int = 800      # tope de la respuesta del modelo (respuestas cortas; protege el cupo)
 
     @classmethod
     def from_env(cls, project: str | None = None, defaults: dict[str, str] | None = None) -> "Settings":
@@ -65,7 +66,7 @@ class Settings:
 
         return cls(
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest"),
             gemini_fallback_models=lista(os.getenv("GEMINI_FALLBACK_MODELS", "")),
             database_url=get("DATABASE_URL"),
             jwt_secret=get("JWT_SECRET", shared=False),
@@ -79,5 +80,6 @@ class Settings:
             resume_days=num("RESUME_DAYS", 30),
             chat_budget_s=float(num("CHAT_BUDGET_S", 50)),
             pool_max=num("POOL_MAX", 5),
+            max_output_tokens=num("MAX_OUTPUT_TOKENS", 800),
             cors_origins=lista(get("CORS_ORIGINS", shared=False)),
         )

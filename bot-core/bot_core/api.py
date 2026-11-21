@@ -44,7 +44,8 @@ def create_app(settings: Settings, project: Project, store: Store | None = None,
             pool = await open_pool(settings.database_url, settings.pool_max)
             state["engine"] = BotEngine(settings, PostgresStore(pool),
                                         GeminiLLM(settings.gemini_api_key, settings.gemini_model,
-                                                settings.gemini_fallback_models), project)
+                                                settings.gemini_fallback_models,
+                                                max_output_tokens=settings.max_output_tokens), project)
             state["pool"] = pool
             await project.on_startup(pool)
         yield
