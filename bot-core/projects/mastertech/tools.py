@@ -15,7 +15,7 @@ from . import catalog as cat
 
 Orden = Literal["relevancia", "precio_asc", "precio_desc"]
 IdsProductos = Annotated[str, "ids de 2 a 3 productos separados por coma, por ejemplo: 12,15"]
-Texto = Annotated[str, "palabras del producto, sin precios (ej: laptop gamer, iphone 15, mouse inalámbrico)"]
+Texto = Annotated[str, "palabras del producto, sin precios (ej: laptop gamer, iphone 15, mouse inalámbrico) o su código (ej: LAP-0012)"]
 Categoria = Annotated[str, "categoría de la tienda (ej: laptops, teléfonos, consolas, accesorios, componentes)"]
 Soles = Annotated[float, "monto en soles (S/)"]
 
@@ -30,7 +30,7 @@ def register(reg: ToolRegistry, api, specs) -> None:
 
     # ----------------------------------------------------------------- catalogo
     @reg.tool("Busca en el catálogo real de la tienda (con stock y precios actuales). Todos los filtros son opcionales. "
-              "'texto' son palabras del producto (laptop gamer, iphone, mouse). Por defecto solo muestra lo que tiene stock. "
+              "'texto' son palabras del producto (laptop gamer, iphone, mouse) o un código de producto como LAP-0012 (prefijo de su categoría + número). Por defecto solo muestra lo que tiene stock. "
               "Si la app muestra tarjetas con foto y botón Agregar, no repitas toda la ficha en tu texto.", guest=True)
     async def buscar_productos(ctx: ToolContext, texto: Optional[Texto] = None, categoria: Optional[Categoria] = None,
                                marca: Optional[str] = None, precio_min: Optional[Soles] = None,

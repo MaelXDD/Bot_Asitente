@@ -81,6 +81,24 @@ def test_search_requires_all_words_and_filters():
     assert len(res) == 2 and total == 3
 
 
+def test_search_by_product_code_is_exact_and_tolerant_to_format():
+    pref = {1: "LAP", 2: "LAP", 3: "CEL", 4: "CEL", 5: "PER", 6: "PER", 7: "LAP"}
+    con_codigo = [{**p, "codigo": f"{pref.get(p['id'], 'PRD')}-{p['id']:04d}"} for p in PRODUCTOS]
+    for pedido in ("LAP-0007", "lap-7", "LAP 0007", "lap0007", "muéstrame el producto LAP-0007"):
+        assert ids(cat.buscar(con_codigo, pedido)) == [7], pedido
+    assert ids(cat.buscar(con_codigo, "LAP-0099")) == []                     # no existe: no cae en busqueda por palabras
+    assert ids(cat.buscar(con_codigo, "CEL-0004")) == []                     # agotado: no sale salvo solo_con_stock=False
+    assert ids(cat.buscar(con_codigo, "CEL-0004", solo_con_stock=False)) == [4]
+    prefijos = cat.prefijos_de(con_codigo)
+    assert prefijos >= {"LAP", "CEL", "PER"}
+    assert cat.codigo_pedido("laptop gamer", prefijos) is None
+    assert cat.codigo_pedido("quiero 12 mouse", prefijos) is None
+    assert cat.codigo_pedido("lap 12", prefijos) is None                     # sin guion hacen falta 4 digitos
+    assert cat.codigo_pedido("usb-3", prefijos) is None                      # prefijo que no existe
+    assert cat.codigo_pedido("LAP-0007", None) is None                       # backend sin codigos: busqueda normal
+    assert cat.ficha(con_codigo[0])["codigo"] == "LAP-0001"
+
+
 def test_ficha_warns_low_stock_and_formats_soles():
     f = cat.ficha(PRODUCTOS[2])
     assert f["precio_texto"] == "S/ 4,199.00" and f["aviso"] == "quedan solo 3 unidades"
