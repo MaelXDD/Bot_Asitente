@@ -38,6 +38,7 @@ class ToolSpec:
     fn: Callable[..., Any]
     schema: dict
     roles: frozenset[str] | None = None
+    guest: bool = False          # True = tambien disponible para visitantes sin sesion (solo datos publicos)
     confirm: bool = False
     summary: Callable[[dict], str] | None = None
     success_message: Callable[[dict], str] | None = None
@@ -116,11 +117,11 @@ class ToolRegistry:
 
     def tool(self, description: str, *, name: str | None = None, roles: list[str] | None = None,
              confirm: bool = False, summary: Callable[[dict], str] | None = None,
-             success_message: Callable[[dict], str] | None = None):
+             success_message: Callable[[dict], str] | None = None, guest: bool = False):
         def deco(fn: Callable[..., Any]):
             spec = ToolSpec(
                 name=name or fn.__name__, description=description, fn=fn, schema=build_schema(fn),
-                roles=frozenset(roles) if roles else None, confirm=confirm,
+                roles=frozenset(roles) if roles else None, confirm=confirm, guest=guest,
                 summary=summary, success_message=success_message,
             )
             if confirm and summary is None:
@@ -131,6 +132,10 @@ class ToolRegistry:
 
     def get(self, name: str) -> ToolSpec | None:
         return self._tools.get(name)
+
+    def for_guest(self) -> list[ToolSpec]:
+        """Herramientas para visitantes: solo las marcadas guest=True (por defecto ninguna: seguro por omision)."""
+        return [t for t in self._tools.values() if t.guest and not t.confirm]
 
     def for_role(self, role: str) -> list[ToolSpec]:
         return [t for t in self._tools.values() if t.allowed_for(role)]

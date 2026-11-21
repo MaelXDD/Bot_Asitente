@@ -1,6 +1,7 @@
 """Herramientas del asistente de Master Tech.
 
-Todas son de LECTURA: el bot orienta y muestra productos, pero no agrega al carrito ni cobra. El cliente
+Todas son de LECTURA. Las de catálogo (`guest=True`) también las usan los visitantes sin sesión; las del cliente
+(mis_compras, recomendaciones_para_mi) exigen sesión. El bot orienta y muestra productos, pero no agrega al carrito ni cobra. El cliente
 pulsa "Agregar" en la tarjeta y paga en la web (Stripe). Las tarjetas se piden con `_ui`: el motor no se
 las pasa al modelo, solo al frontend.
 """
@@ -30,7 +31,7 @@ def register(reg: ToolRegistry, api, specs) -> None:
     # ----------------------------------------------------------------- catalogo
     @reg.tool("Busca en el catálogo real de la tienda (con stock y precios actuales). Todos los filtros son opcionales. "
               "'texto' son palabras del producto (laptop gamer, iphone, mouse). Por defecto solo muestra lo que tiene stock. "
-              "Si la app muestra tarjetas con foto y botón Agregar, no repitas toda la ficha en tu texto.")
+              "Si la app muestra tarjetas con foto y botón Agregar, no repitas toda la ficha en tu texto.", guest=True)
     async def buscar_productos(ctx: ToolContext, texto: Optional[Texto] = None, categoria: Optional[Categoria] = None,
                                marca: Optional[str] = None, precio_min: Optional[Soles] = None,
                                precio_max: Optional[Soles] = None, orden: Orden = "relevancia",
@@ -51,7 +52,7 @@ def register(reg: ToolRegistry, api, specs) -> None:
         return out
 
     @reg.tool("Ficha completa de UN producto (descripción completa, stock y especificaciones técnicas si existen). "
-              "Usa el id que devolvió buscar_productos.")
+              "Usa el id que devolvió buscar_productos.", guest=True)
     async def detalle_producto(ctx: ToolContext, producto_id: int) -> dict:
         p = (await por_id()).get(producto_id)
         if p is None:
@@ -62,7 +63,7 @@ def register(reg: ToolRegistry, api, specs) -> None:
             out["nota"] = "No hay especificaciones técnicas cargadas; limítate a la descripción."
         return out
 
-    @reg.tool("Compara 2 o 3 productos lado a lado (precio, stock, descripción y especificaciones).")
+    @reg.tool("Compara 2 o 3 productos lado a lado (precio, stock, descripción y especificaciones).", guest=True)
     async def comparar_productos(ctx: ToolContext, ids: IdsProductos) -> dict:
         try:
             pedidos = list(dict.fromkeys(int(x) for x in str(ids).replace(";", ",").split(",") if x.strip()))
@@ -79,7 +80,7 @@ def register(reg: ToolRegistry, api, specs) -> None:
         return {"productos": [{**cat.ficha(p, largo=True), "especificaciones": esp.get(p["id"], [])} for p in productos],
                 "_ui": _tarjetas(productos)}
 
-    @reg.tool("Lista las categorías de la tienda con cuántos productos tienen en stock.")
+    @reg.tool("Lista las categorías de la tienda con cuántos productos tienen en stock.", guest=True)
     async def listar_categorias(ctx: ToolContext) -> dict:
         productos = await api.catalogo()
         cuenta: dict[str, int] = {}

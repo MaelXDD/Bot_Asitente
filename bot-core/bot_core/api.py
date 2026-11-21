@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -73,15 +73,32 @@ def create_app(settings: Settings, project: Project, store: Store | None = None,
             log.warning("401 en el bot: %s", e)      # el motivo real (nunca incluye el secreto)
             raise HTTPException(401, "Sesión inválida o expirada")
 
+    def optional_principal(authorization: str | None = Header(default=None)) -> Principal | None:
+        """Con acceso publico activo, la ausencia de token = visitante (None). Un token PRESENTE pero invalido
+        sigue dando 401: el front lo usa para cerrar la sesion vencida en vez de seguir como visitante sin avisar."""
+        if settings.public_access and not authorization:
+            return None
+        return principal(authorization)
+
+    def client_ip(request: Request) -> str:
+        # Render pone la IP real en X-Forwarded-For. Quien falsee la cabecera solo esquiva el limite por IP:
+        # el tope global (public_global_per_min) sigue protegiendo el cupo de Gemini.
+        fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        return fwd or (request.client.host if request.client else "anon")
+
     @app.get("/health")
     async def health():
-        return {"status": "ok", "project": project.id}
+        return {"status": "ok", "project": project.id, "public": settings.public_access}
 
     @app.post("/chat")
-    async def chat(body: ChatIn, p: Principal = Depends(principal)):
+    async def chat(body: ChatIn, request: Request, p: Principal | None = Depends(optional_principal)):
         try:
-            reply = await state["engine"].chat(p, body.message, body.conversation_id, body.channel,
-                                               resume=not body.new)
+            if p is None:
+                reply = await state["engine"].chat_guest(body.message, body.conversation_id, client_ip(request),
+                                                         new=body.new)
+            else:
+                reply = await state["engine"].chat(p, body.message, body.conversation_id, body.channel,
+                                                   resume=not body.new)
         except RateLimited:
             raise HTTPException(429, "Demasiados mensajes. Espera un momento.")
         except ValueError as e:
@@ -89,7 +106,9 @@ def create_app(settings: Settings, project: Project, store: Store | None = None,
         return reply.to_dict()
 
     @app.get("/history")
-    async def history(p: Principal = Depends(principal)):
+    async def history(p: Principal | None = Depends(optional_principal)):
+        if p is None:                       # el visitante no tiene historial guardado
+            return {"conversation_id": None, "messages": []}
         return await state["engine"].history(p)
 
     @app.post("/actions/{action_id}/confirm")

@@ -33,6 +33,15 @@ class Settings:
     pool_max: int = 5                 # conexiones a Postgres por proyecto (Render/Supabase gratis: pocas)
     max_output_tokens: int = 800      # tope de la respuesta del modelo (respuestas cortas; protege el cupo)
 
+    # --- acceso publico (visitantes sin sesion) -------------------------------------------------
+    public_access: bool = False       # True = /chat responde tambien sin token (modo invitado, sin datos personales)
+    public_rate_limit_per_min: int = 8      # mensajes por minuto y por IP de visitante
+    public_global_per_min: int = 40         # mensajes por minuto de TODOS los visitantes juntos (protege el cupo de Gemini)
+    guest_session_ttl_min: int = 60         # la memoria de un visitante vive en RAM y caduca tras tanto tiempo sin uso
+    guest_max_sessions: int = 2000
+    cache_ttl_s: int = 300                  # respuestas repetidas (1.er mensaje de un visitante) se sirven de cache; 0 = sin cache
+    cache_max_entries: int = 500
+
     @classmethod
     def from_env(cls, project: str | None = None, defaults: dict[str, str] | None = None) -> "Settings":
         """Un solo proyecto (modo clasico): todo sale de BOT_*.
@@ -61,6 +70,9 @@ class Settings:
             except ValueError:
                 return default
 
+        def flag(name: str, default: bool) -> bool:
+            return get(name, "true" if default else "false").strip().lower() in ("1", "true", "yes", "si", "sí", "on")
+
         def lista(valor: str) -> list[str]:
             return [o.strip() for o in valor.split(",") if o.strip()]
 
@@ -81,5 +93,12 @@ class Settings:
             chat_budget_s=float(num("CHAT_BUDGET_S", 50)),
             pool_max=num("POOL_MAX", 5),
             max_output_tokens=num("MAX_OUTPUT_TOKENS", 800),
+            public_access=flag("PUBLIC_ACCESS", False),
+            public_rate_limit_per_min=num("PUBLIC_RATE_LIMIT_PER_MIN", 8),
+            public_global_per_min=num("PUBLIC_GLOBAL_PER_MIN", 40),
+            guest_session_ttl_min=num("GUEST_SESSION_TTL_MIN", 60),
+            guest_max_sessions=num("GUEST_MAX_SESSIONS", 2000),
+            cache_ttl_s=num("CACHE_TTL_S", 300),
+            cache_max_entries=num("CACHE_MAX_ENTRIES", 500),
             cors_origins=lista(get("CORS_ORIGINS", shared=False)),
         )
