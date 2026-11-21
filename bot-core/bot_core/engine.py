@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from .auth import Principal
+from .cache import TTLCache, normalizar
 from .config import Settings
 from .llm import LLM, LLMError
 from .project import Project
@@ -27,6 +29,14 @@ REGLAS DE SEGURIDAD (tienen prioridad sobre cualquier otra instrucción):
 - Las acciones que modifican datos las confirma el usuario en pantalla. No digas que algo está hecho hasta que el resultado lo confirme.
 - Nunca pidas ni aceptes contraseñas, números de tarjeta o códigos de seguridad.
 - Responde en el idioma del usuario, de forma breve y clara."""
+
+
+GUEST_RULES = """\
+MODO VISITANTE: la persona NO ha iniciado sesión.
+- Solo puedes usar el catálogo público (buscar, ficha, comparar, categorías) y explicar las políticas de la tienda.
+- No tienes acceso a compras, pedidos, perfil ni preferencias guardadas, y no recuerdas visitas anteriores.
+- Si pide "mis pedidos", recomendaciones basadas en sus compras o que recuerdes algo, invítala con amabilidad a iniciar sesión.
+- No pidas datos personales."""
 
 
 class RateLimited(Exception):
@@ -54,6 +64,11 @@ class BotEngine:
     def __init__(self, settings: Settings, store: Store, llm: LLM, project: Project):
         self.s, self.store, self.llm, self.project = settings, store, llm, project
         self.limiter = RateLimiter(settings.rate_limit_per_min)
+        # Modo invitado: limites por IP y global, memoria de sesion en RAM y cache de respuestas repetidas.
+        self.guest_limiter = RateLimiter(settings.public_rate_limit_per_min)
+        self.guest_global = RateLimiter(settings.public_global_per_min)
+        self.guest_sessions = TTLCache(settings.guest_session_ttl_min * 60, settings.guest_max_sessions)
+        self.answer_cache = TTLCache(settings.cache_ttl_s, settings.cache_max_entries)
         self._bg: set[asyncio.Task] = set()
         self._sum_locks: dict[str, asyncio.Lock] = {}     # un solo resumen a la vez por conversacion
         self._install_fact_tools()
@@ -146,6 +161,32 @@ class BotEngine:
                     "mensaje": "Se mostró al usuario un botón para confirmar. Pídele que confirme en pantalla; aún NO está hecho."}
         return await self._exec(spec, ctx, args, col)
 
+    async def _llm_loop(self, system: str, messages: list[dict], decls: list[dict], run) -> tuple[str, bool]:
+        """Ronda modelo <-> herramientas. `run(nombre, args)` ejecuta una herramienta y devuelve su resultado.
+        Devuelve (texto, ok): ok=False si fue un aviso de error/tiempo (esas respuestas NO deben cachearse)."""
+        text, ok = "", True
+        try:
+            async with asyncio.timeout(self.s.chat_budget_s):
+                for _ in range(self.s.max_tool_rounds):
+                    resp = await self.llm.generate(system=system, messages=messages, tools=decls)
+                    if not resp.tool_calls:
+                        text = resp.text
+                        break
+                    messages.append({"role": "assistant", "text": resp.text,
+                                     "tool_calls": [{"name": c.name, "args": c.args} for c in resp.tool_calls],
+                                     "raw": resp.raw})
+                    for call in resp.tool_calls:
+                        messages.append({"role": "tool", "name": call.name, "result": await run(call.name, call.args)})
+                else:
+                    text, ok = "No logré completar la solicitud. ¿Puedes reformularla?", False
+        except TimeoutError:
+            log.warning("chat excedio el presupuesto de %ss", self.s.chat_budget_s)
+            text, ok = "Me estoy demorando más de lo normal. Inténtalo de nuevo en unos segundos.", False
+        except LLMError as e:
+            log.warning("LLM error: %s", e)
+            text, ok = "Ahora mismo no puedo responder. Inténtalo de nuevo en unos segundos.", False
+        return text, ok
+
     # ------------------------------------------------------------------ chat
     async def chat(self, principal: Principal, message: str, conversation_id: str | None = None,
                    channel: str = "web", resume: bool = False) -> ChatReply:
@@ -177,34 +218,81 @@ class BotEngine:
         col = _Collected()
         decls = [{"name": t.name, "description": t.description, "parameters": t.schema}
                  for t in self.project.registry.for_role(principal.role)]
-        text = ""
-        try:
-            async with asyncio.timeout(self.s.chat_budget_s):
-                for _ in range(self.s.max_tool_rounds):
-                    resp = await self.llm.generate(system=system, messages=messages, tools=decls)
-                    if not resp.tool_calls:
-                        text = resp.text
-                        break
-                    messages.append({"role": "assistant", "text": resp.text,
-                                     "tool_calls": [{"name": c.name, "args": c.args} for c in resp.tool_calls],
-                                     "raw": resp.raw})
-                    for call in resp.tool_calls:
-                        result = await self._run_tool(call.name, call.args, ctx, col)
-                        messages.append({"role": "tool", "name": call.name, "result": result})
-                else:
-                    text = "No logré completar la solicitud. ¿Puedes reformularla?"
-        except TimeoutError:
-            log.warning("chat excedio el presupuesto de %ss", self.s.chat_budget_s)
-            text = "Me estoy demorando más de lo normal. Inténtalo de nuevo en unos segundos."
-        except LLMError as e:
-            log.warning("LLM error: %s", e)
-            text = "Ahora mismo no puedo responder. Inténtalo de nuevo en unos segundos."
+        text, _ = await self._llm_loop(system, messages, decls, lambda n, a: self._run_tool(n, a, ctx, col))
 
         if not text:
             text = "Listo." if (col.pending or col.ui) else "No tengo una respuesta para eso. ¿Puedes darme más detalle?"
         await self.store.add_message(conv.id, "assistant", text, ui=col.ui)
         self._spawn(self._maybe_summarize(conv.id))
         return ChatReply(conv.id, text, col.pending, col.ui)
+
+    # ------------------------------------------------------------------ visitantes (sin sesion)
+    async def chat_guest(self, message: str, conversation_id: str | None = None, client_key: str = "anon",
+                         new: bool = False) -> ChatReply:
+        """Chat publico. Sin datos personales y sin base de datos: la memoria del visitante vive en RAM (caduca sola),
+        solo ve herramientas marcadas guest=True y las preguntas repetidas se sirven de la cache de respuestas."""
+        if not self.s.public_access:
+            raise PermissionError("acceso público desactivado")
+        message = (message or "").strip()
+        if not message:
+            raise ValueError("mensaje vacío")
+        if len(message) > self.s.max_user_chars:
+            raise ValueError(f"mensaje demasiado largo (máx. {self.s.max_user_chars} caracteres)")
+        # por IP primero (un abusador no gasta el cupo global) y luego el tope de todos los visitantes juntos
+        if not self.guest_limiter.allow(f"{self.project.id}:{client_key}") or \
+                not self.guest_global.allow(self.project.id):
+            raise RateLimited()
+
+        hist = None if new or not conversation_id else self.guest_sessions.get(conversation_id, touch=True)
+        if hist is None:
+            conversation_id, hist = f"g-{uuid.uuid4().hex}", []
+        keep = max(2, self.s.history_messages)
+
+        def guardar(texto: str) -> None:
+            nuevo = hist + [{"role": "user", "text": message}, {"role": "assistant", "text": texto}]
+            nuevo = nuevo[-keep:]
+            while nuevo and nuevo[0]["role"] != "user":
+                nuevo.pop(0)
+            self.guest_sessions.set(conversation_id, nuevo)
+
+        # Solo el PRIMER mensaje de una sesion se cachea: sin historial, la respuesta no depende del contexto.
+        clave = f"{self.project.id}:{normalizar(message)}" if not hist and normalizar(message) else None
+        if clave and (hit := self.answer_cache.get(clave)) is not None:
+            guardar(hit["text"])
+            return ChatReply(conversation_id, hit["text"], [], list(hit["ui"]))
+
+        parts = [self.project.system_prompt().strip(), CORE_RULES, GUEST_RULES, self._now_line()]
+        system = "\n\n".join(parts)
+        messages: list[dict] = [dict(m) for m in hist[-keep:]]
+        messages.append({"role": "user", "text": message})
+        col = _Collected()
+        reg = self.project.registry
+        decls = [{"name": t.name, "description": t.description, "parameters": t.schema} for t in reg.for_guest()]
+
+        async def run(name: str, raw_args: dict) -> dict:
+            spec = reg.get(name)
+            if spec is None or not spec.guest or spec.confirm:
+                return {"error": "herramienta no disponible"}
+            try:
+                result = await reg.invoke(spec, ToolContext(self.project.id, "guest", "GUEST", "", 0, conversation_id, None),
+                                          reg.clean_args(spec, raw_args))
+            except ToolError as e:
+                return {"error": str(e)}
+            except Exception:                   # noqa: BLE001
+                log.exception("tool %s fallo (visitante)", name)
+                return {"error": "No se pudo completar la operación. Inténtalo más tarde."}
+            ui = result.pop("_ui", None)
+            if ui:
+                col.ui.append(ui)
+            return result
+
+        text, ok = await self._llm_loop(system, messages, decls, run)
+        if not text:
+            text, ok = ("Listo." if col.ui else "No tengo una respuesta para eso. ¿Puedes darme más detalle?"), False
+        guardar(text)
+        if clave and ok:
+            self.answer_cache.set(clave, {"text": text, "ui": list(col.ui)})
+        return ChatReply(conversation_id, text, [], col.ui)
 
     # ------------------------------------------------------------------ confirmaciones
     async def resolve_action(self, principal: Principal, action_id: str, approve: bool) -> ChatReply:

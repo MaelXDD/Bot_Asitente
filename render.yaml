@@ -15,6 +15,10 @@ services:
       # --- compartido ---
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_MODEL               # Flash-Lite: mayor cupo gratuito
+        value: gemini-flash-lite-latest
+      - key: GEMINI_FALLBACK_MODELS
+        value: gemini-2.5-flash-lite,gemini-2.5-flash
       - key: BOT_DATABASE_URL           # BD comun (esquema "bot"). Un proyecto puede usar otra con <PROYECTO>_DATABASE_URL
         sync: false
       # --- Master Tech ---
@@ -24,6 +28,8 @@ services:
         sync: false
       - key: MASTERTECH_CORS_ORIGINS    # URL del frontend de Master Tech
         sync: false
+      - key: MASTERTECH_PUBLIC_ACCESS   # visitantes sin sesion (solo catalogo y politicas); false = exige sesion
+        value: "true"
       # --- Citas ---
       - key: CITAS_JWT_SECRET           # = secreto con que firma el backend de citas
         sync: false

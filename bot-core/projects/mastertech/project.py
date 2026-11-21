@@ -18,7 +18,8 @@ log = logging.getLogger("projects.mastertech")
 
 
 # Valores por defecto de este proyecto cuando corre junto a otros (se pisan con <PROYECTO>_JWT_ISSUER, etc.).
-ENV_DEFAULTS = {"JWT_DEFAULT_ROLE": "USER"}
+# PUBLIC_ACCESS: el chat tambien atiende a visitantes sin sesion (solo catalogo y politicas, sin datos personales).
+ENV_DEFAULTS = {"JWT_DEFAULT_ROLE": "USER", "PUBLIC_ACCESS": "true"}
 
 class MastertechProject(Project):
     id = "mastertech"

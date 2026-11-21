@@ -73,6 +73,28 @@ def grupos_de_busqueda(texto: str) -> list[set[str]]:
     return out
 
 
+_RE_CODIGO = re.compile(r"\b([a-z]{2,4})(\s*[-_]\s*|\s*)(\d{1,6})\b", re.IGNORECASE)
+
+
+def prefijos_de(productos: Iterable[dict]) -> set[str]:
+    """Prefijos de codigo en uso (LAP, CON...): salen de los propios productos, asi no hay que mantener una lista."""
+    return {str(p["codigo"]).split("-")[0].upper() for p in productos if p.get("codigo") and "-" in str(p["codigo"])}
+
+
+def codigo_pedido(texto: str | None, prefijos: set[str] | None = None) -> str | None:
+    """'lap-12', 'LAP 0012' o 'el producto LAP0012' -> 'LAP-0012'. None si el texto no pide un codigo.
+
+    Solo cuenta si el prefijo es uno de los que existen (asi 'con 16 gb' o 'usb-3' siguen siendo busqueda normal) y,
+    cuando no hay guion, con al menos 4 digitos."""
+    if not prefijos:
+        return None
+    for m in _RE_CODIGO.finditer(texto or ""):
+        pref, sep, dig = m.group(1).upper(), m.group(2), m.group(3)
+        if pref in prefijos and (sep.strip() or len(dig) >= 4):
+            return f"{pref}-{int(dig):04d}"
+    return None
+
+
 def _pajar(p: dict) -> tuple[str, str, str]:
     cab = norm(f"{p.get('nombre', '')} {p.get('marca', '')}")
     cat = norm(p.get("categoriaNombre"))
@@ -105,11 +127,15 @@ def buscar(productos: Iterable[dict], texto: str | None = None, categoria: str |
            marca: str | None = None, precio_min: float | None = None, precio_max: float | None = None,
            solo_con_stock: bool = True, orden: str = "relevancia", limite: int = 5) -> tuple[list[dict], int]:
     """Devuelve (primeros `limite` resultados, total de coincidencias)."""
-    grupos = grupos_de_busqueda(texto or "")
+    productos = list(productos)
+    codigo = codigo_pedido(texto, prefijos_de(productos))   # "LAP-0012": coincidencia exacta, sin buscar por palabras
+    grupos = [] if codigo else grupos_de_busqueda(texto or "")
     g_cat = grupos_de_busqueda(categoria or "")
     m = norm(marca)
     hits: list[tuple[int, dict]] = []
     for p in productos:
+        if codigo and str(p.get("codigo") or "").upper() != codigo:
+            continue
         if solo_con_stock and (p.get("stock") or 0) <= 0:
             continue
         precio = float(p.get("precio") or 0)
@@ -138,7 +164,7 @@ def buscar(productos: Iterable[dict], texto: str | None = None, categoria: str |
 def ficha(p: dict, largo: bool = False) -> dict:
     desc = " ".join(str(p.get("descripcion") or "").split())
     d = {
-        "id": p.get("id"), "nombre": p.get("nombre"), "marca": p.get("marca") or "Sin marca",
+        "id": p.get("id"), "codigo": p.get("codigo"), "nombre": p.get("nombre"), "marca": p.get("marca") or "Sin marca",
         "categoria": p.get("categoriaNombre"), "precio": float(p.get("precio") or 0), "precio_texto": soles(p.get("precio")),
         "stock": p.get("stock") or 0, "disponible": (p.get("stock") or 0) > 0,
         "descripcion": desc if largo else desc[:160],
