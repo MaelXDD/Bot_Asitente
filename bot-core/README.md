@@ -31,6 +31,23 @@ Plan gratuito: el servicio se duerme tras ~15 min sin uso y tarda ~30-60 s en de
 
 ---
 
+## Acceso público, caché y modelo (Master Tech)
+
+- **Visitantes sin sesión** (`MASTERTECH_PUBLIC_ACCESS=true`, activo por defecto): `POST /chat` responde también sin `Authorization`.
+  El visitante solo puede buscar, ver fichas, comparar, listar categorías y preguntar por las políticas de la tienda.
+  No tiene acceso a compras, perfil ni preferencias, y **no se escribe nada en la base de datos**.
+  Si llega un token inválido o vencido sigue respondiendo 401 (el front cierra la sesión); `/history`, `/me/*` y `/actions/*` siguen exigiendo sesión.
+- **Memoria del visitante**: vive en RAM (hilo de la conversación, `MASTERTECH_GUEST_SESSION_TTL_MIN`, 60 min sin uso) y se pierde si el servicio se reinicia.
+  El servidor devuelve un `conversation_id` (`g-…`) que el front reenvía para seguir el hilo.
+- **Caché de respuestas** (`MASTERTECH_CACHE_TTL_S`, 300 s): solo el primer mensaje de un visitante (sin historial) se cachea, por pregunta normalizada
+  (sin tildes ni mayúsculas). Las respuestas de error o de tiempo agotado nunca se cachean. Puede mostrar precios o stock de hasta 5 minutos atrás.
+- **Límites**: `MASTERTECH_PUBLIC_RATE_LIMIT_PER_MIN` (por IP, 8) y `MASTERTECH_PUBLIC_GLOBAL_PER_MIN` (todos los visitantes, 40; protege el cupo de Gemini).
+- **Modelo**: `GEMINI_MODEL=gemini-flash-lite-latest` (Flash-Lite, el de mayor cupo gratuito), con `GEMINI_FALLBACK_MODELS` como respaldo y
+  `BOT_MAX_OUTPUT_TOKENS` (800) como tope de respuesta. Si en Render ya tienes `GEMINI_MODEL` definido, **cámbialo allí**: la variable manda sobre el valor por defecto.
+- Cada herramienta nueva es **privada por defecto**; para exponerla a visitantes hay que marcarla `@reg.tool(..., guest=True)`.
+
+---
+
 ## Proyecto `mastertech` (tienda Master Tech)
 
 Asistente con Gemini que conoce el catálogo en vivo, el historial de compras de cada cliente y lo que el cliente
